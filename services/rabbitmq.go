@@ -1,11 +1,16 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -13,9 +18,10 @@ var RabbitMQConn *amqp.Connection
 var RabbitMQConnMutex sync.Mutex
 
 type Job struct {
-	ID      string      `json:"id"`
-	Payload interface{} `json:"payload"`
-	URL     string      `json:"url"`
+	ID        string      `json:"id"`
+	Payload   interface{} `json:"payload"`
+	URL       string      `json:"url"`
+	Timestamp string      `json:"timestamp"`
 }
 
 func ConnectToRabbitMQ(rabbitMQURL string) {
@@ -141,8 +147,34 @@ func processMessage(msg amqp.Delivery) {
 	}
 	resp.Body.Close() // Close the response body
 
-	// Update MongoDB
-	// ... MongoDB update logic ...
+	// Update DynamoDB
+	partitionKey := fmt.Sprintf("job:%s:%s", job.ID, job.Timestamp)
+
+	// Marshal job.Payload to a JSON string
+	jsonPayload, err := json.Marshal(job.Payload)
+	if err != nil {
+		log.Printf("Error marshalling payload to JSON: %v", err)
+		return
+	}
+
+	// Prepare the item to write to DynamoDB
+	item := map[string]types.AttributeValue{
+		"RowKey":  &types.AttributeValueMemberS{Value: partitionKey},
+		"Payload": &types.AttributeValueMemberS{Value: string(jsonPayload)},
+		// Include other fields as necessary
+	}
+
+	// Write to DynamoDB
+	_, err = DynamoClient.PutItem(context.Background(), &dynamodb.PutItemInput{
+		TableName: aws.String("jobs"),
+		Item:      item,
+	})
+	if err != nil {
+		log.Printf("Failed to write to DynamoDB: %v", err)
+		return
+	}
+
+	log.Printf("Successfully wrote job with URL %s to DynamoDB", job.URL)
 }
 
 func isRecurrentJob(url string) bool {

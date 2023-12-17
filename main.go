@@ -17,6 +17,9 @@ func main() {
 	}
 	services.ConnectMongoDB(mongoDBURL)
 
+	// Connect to DynamoDB
+	services.ConnectDynamoDB()
+
 	// Connect to RabbitMQ
 	// rabbitMQURL := "amqp://guest:guest@localhost:5672/" // local rabbitmq url
 	rabbitMQURL := config.ReadEnv("RABBITMQ_URL")

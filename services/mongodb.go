@@ -28,7 +28,7 @@ func ConnectMongoDB(mongoDBURL string) {
 	if err := MongoClient.Database("admin").RunCommand(context.Background(), bson.D{{Key: "ping", Value: 1}}).Err(); err != nil {
 		log.Fatalf("Failed to ping MongoDB: %v", err)
 	}
-	log.Print("Connected to MongoDB successfully.")
+	log.Print("Connected to MongoDB successfully")
 }
 
 func ColHelper(collectionName string) *mongo.Collection {
