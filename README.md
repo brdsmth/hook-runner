@@ -1,0 +1,1 @@
+Task runner service will fetch messages from the message queue. Each message will contain the job id and the URL to hit. Task runner can hit the URL then update the job status on the database. Task runner will also add the job back to the database if it is recurrent. Another service can do this rescheduling part if we want to split the service a little bit more.
