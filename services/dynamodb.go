@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	localConfig "hook-runner/config"
 	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -13,36 +14,34 @@ var DynamoClient *dynamodb.Client
 
 // ConnectDynamoDB initializes and sets up a DynamoDB client.
 func ConnectDynamoDB() {
-	// Load the Shared AWS Configuration (~/.aws/config)
 	/*
-		When using the AWS SDK for Go, if you have set the environment variables as described above, the SDK will automatically use these credentials. You don't need to manually specify them in your code.
+		When using the AWS SDK for Go, if you have set the environment variables in (~/.aws/config)
+		the SDK will automatically use these credentials. You don't need to manually specify them in your code.
 	*/
+	// Load the Shared AWS Configuration (~/.aws/config)
+	// The profile name will be stored in an environment variable
+	awsConfigProfile := localConfig.ReadEnv("AWS_CONFIG_PROFILE")
+	if awsConfigProfile == "" {
+		log.Fatal("AWS_CONFIG_PROFILE environment variable not set")
+	}
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithSharedConfigProfile("brdrsmth"),
+		config.WithSharedConfigProfile(awsConfigProfile),
 		config.WithRegion("us-east-1"),
-		// Uncomment and set the endpoint if you're using a local version of DynamoDB
-		// config.WithEndpointResolver(aws.EndpointResolverFunc(
-		//     func(service, region string) (aws.Endpoint, error) {
-		//         if service == dynamodb.ServiceID {
-		//             return aws.Endpoint{
-		//                 URL:           "http://localhost:8000",
-		//                 SigningRegion: "us-west-2",
-		//             }, nil
-		//         }
-		//         // Fallback to default resolution
-		//         return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		//     })),
 	)
 	if err != nil {
 		log.Fatalf("unable to load SDK config, %v", err)
 	}
 
-	// fmt.Print(cfg)
 	// Create DynamoDB client
 	DynamoClient = dynamodb.NewFromConfig(cfg)
 
-	// "Ping" DynamoDB to confirm connection
-	tableName := "jobs" // Replace with your table name
+	// Ping DynamoDB to confirm connection
+	// The table name to store processed message will be stored in an environment variable
+	dynamoDBProcessedTable := localConfig.ReadEnv("DYNAMODB_PROCESSED_TABLE")
+	if dynamoDBProcessedTable == "" {
+		log.Fatal("DYNAMODB_PROCESSED_TABLE environment variable not set")
+	}
+	tableName := dynamoDBProcessedTable
 	_, err = DynamoClient.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{
 		TableName: aws.String(tableName),
 	})

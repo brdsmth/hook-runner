@@ -1,12 +1,15 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"sync"
+	"time"
+
+	localConfig "hook-runner/config"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -18,10 +21,12 @@ var RabbitMQConn *amqp.Connection
 var RabbitMQConnMutex sync.Mutex
 
 type Job struct {
-	ID        string      `json:"id"`
-	Payload   interface{} `json:"payload"`
-	URL       string      `json:"url"`
-	Timestamp string      `json:"timestamp"`
+	RowKey    string      `json:"RowKey"`
+	JobID     string      `json:"JobID"`
+	Payload   interface{} `json:"Payload"`
+	URL       string      `json:"URL"`
+	ExecuteAt string      `json:"ExecuteAt"`
+	Status    string      `json:"Status"`
 }
 
 func ConnectToRabbitMQ(rabbitMQURL string) {
@@ -52,7 +57,12 @@ func Fetch() {
 	defer ch.Close()
 
 	// Declare the queue
-	q, err := ch.QueueDeclare("QUEUE", false, false, false, false, nil)
+	// Pull the name of the RabbitMQ queue from env
+	rabbitMQQueue := localConfig.ReadEnv("RABBITMQ_QUEUE")
+	if rabbitMQQueue == "" {
+		log.Fatal("RABBITMQ_QUEUE environment variable not set")
+	}
+	q, err := ch.QueueDeclare(rabbitMQQueue, false, false, false, false, nil)
 	if err != nil {
 		log.Printf("Failed to declare a queue: %v", err)
 		return
@@ -78,43 +88,13 @@ func Fetch() {
 		If you were to start the goroutine inside the for loop, it would create a new goroutine for each message, which might not be necessary and could lead to a large number of goroutines, potentially overwhelming the system.
 	*/
 	go func() {
-		for d := range msgs {
-			processMessage(d) // Or, for concurrent processing of each message: go processMessage(d)
+		for m := range msgs {
+			/*
+				For concurrent processing of each message: go processMessage(d)
+			*/
+			processMessage(m)
 		}
 	}()
-
-	// go func() {
-	// 	for d := range msgs {
-	// 		url := string(d.Body)
-
-	// 		// Make HTTP request
-	// 		resp, err := http.Get(url)
-	// 		if err != nil {
-	// 			log.Printf("Error making HTTP request: %v", err)
-	// 			continue
-	// 		}
-	// 		resp.Body.Close() // Close the response body
-
-	// 		// Update MongoDB
-	// 		filter := bson.M{"url": url}
-	// 		update := bson.M{"$set": bson.M{"status": "processed"}}
-	// 		_, err = MongoClient.Database("your_db").Collection("your_collection").UpdateOne(context.Background(), filter, update)
-	// 		if err != nil {
-	// 			log.Printf("Failed to update MongoDB: %v", err)
-	// 		}
-
-	// 		// Check if job is recurrent and requeue if necessary
-	// 		if isRecurrentJob(url) {
-	// 			err = ch.PublishWithContext(context.Background(), "", "QUEUE", false, false, amqp.Publishing{
-	// 				ContentType: "text/plain",
-	// 				Body:        []byte(url),
-	// 			})
-	// 			if err != nil {
-	// 				log.Printf("Failed to requeue job: %v", err)
-	// 			}
-	// 		}
-	// 	}
-	// }()
 
 	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	/*
@@ -131,42 +111,57 @@ func processMessage(msg amqp.Delivery) {
 		log.Printf("Error parsing JSON message: %v", err)
 		return
 	}
-	payload := string(msg.Body)
-	jobURL := job.URL
-	jobURLString := string(job.URL)
 
-	log.Print(payload)
-	log.Print(jobURL)
-	log.Print(jobURLString)
+	// DEBUG	-> print out the job grabbed from the RabbitMQ queue
+	// log.Print(job)
+	log.Printf("Processing:\t\t%s", job.RowKey)
 
-	// Make HTTP request
-	resp, err := http.Get(job.URL)
+	// Marshal the Payload to a JSON byte slice
+	payloadBytes, err := json.Marshal(job.Payload)
 	if err != nil {
-		log.Printf("Error making HTTP request: %v", err)
-		return
+		log.Printf("Error marshaling payload for job %s: %v", job.JobID, err)
 	}
-	resp.Body.Close() // Close the response body
+
+	// Convert the byte slice to a reader
+	payloadReader := bytes.NewReader(payloadBytes)
+
+	// Make an HTTP POST request with the JSON payload
+	resp, err := http.Post(job.URL, "application/json", payloadReader)
+	if err != nil {
+		log.Printf("Error making HTTP POST request to %s: %v", job.URL, err)
+	}
+	log.Printf("Sent: %s to URL: %s with Status: %s", job.JobID, job.URL, resp.Status)
 
 	// Update DynamoDB
-	partitionKey := fmt.Sprintf("job:%s:%s", job.ID, job.Timestamp)
+	// Set the status of the job after the POST request is made
+	job.Status = "PROCESSED"
 
-	// Marshal job.Payload to a JSON string
-	jsonPayload, err := json.Marshal(job.Payload)
+	// Marshal the Payload to a JSON string
+	postProcessPayloadBytes, err := json.Marshal(job.Payload)
 	if err != nil {
-		log.Printf("Error marshalling payload to JSON: %v", err)
+		log.Printf("Error procesing job:\t\t%s", job.RowKey)
 		return
 	}
-
-	// Prepare the item to write to DynamoDB
+	postProcessPayloadString := string(postProcessPayloadBytes)
+	currentTime := time.Now().Format(time.RFC3339)
 	item := map[string]types.AttributeValue{
-		"RowKey":  &types.AttributeValueMemberS{Value: partitionKey},
-		"Payload": &types.AttributeValueMemberS{Value: string(jsonPayload)},
-		// Include other fields as necessary
+		"RowKey":     &types.AttributeValueMemberS{Value: job.RowKey},
+		"JobID":      &types.AttributeValueMemberS{Value: job.JobID},
+		"Payload":    &types.AttributeValueMemberS{Value: postProcessPayloadString},
+		"URL":        &types.AttributeValueMemberS{Value: job.URL},
+		"Status":     &types.AttributeValueMemberS{Value: job.Status},
+		"ExecutedAt": &types.AttributeValueMemberS{Value: currentTime},
 	}
 
-	// Write to DynamoDB
+	// Write the update job to the `processed` Table
+	// The table name to store processed message will be stored in an environment variable
+	dynamoDBProcessedTable := localConfig.ReadEnv("DYNAMODB_PROCESSED_TABLE")
+	if dynamoDBProcessedTable == "" {
+		log.Fatal("DYNAMODB_PROCESSED_TABLE environment variable not set")
+	}
+	processedTableName := dynamoDBProcessedTable
 	_, err = DynamoClient.PutItem(context.Background(), &dynamodb.PutItemInput{
-		TableName: aws.String("jobs"),
+		TableName: aws.String(processedTableName),
 		Item:      item,
 	})
 	if err != nil {
@@ -174,10 +169,24 @@ func processMessage(msg amqp.Delivery) {
 		return
 	}
 
-	log.Printf("Successfully wrote job with URL %s to DynamoDB", job.URL)
-}
+	// Delete the job from the queue table
+	// The table name to store processed message will be stored in an environment variable
+	dynamoDBQueueTable := localConfig.ReadEnv("DYNAMODB_QUEUE_TABLE")
+	if dynamoDBQueueTable == "" {
+		log.Fatal("DYNAMODB_QUEUE_TABLE environment variable not set")
+	}
+	queueTableName := dynamoDBQueueTable
+	_, err = DynamoClient.DeleteItem(context.Background(), &dynamodb.DeleteItemInput{
+		TableName: aws.String(queueTableName),
+		Key: map[string]types.AttributeValue{
+			"RowKey":    &types.AttributeValueMemberS{Value: job.RowKey},
+			"ExecuteAt": &types.AttributeValueMemberS{Value: job.ExecuteAt},
+		},
+	})
+	if err != nil {
+		log.Printf("Failed to delete from DynamoDB: %v, %s", err, job.RowKey)
+		return
+	}
 
-func isRecurrentJob(url string) bool {
-	// Implement your logic to check if the job is recurrent
-	return false
+	log.Printf("Processed job: %s with execute time: %s at %s", job.JobID, job.ExecuteAt, currentTime)
 }
