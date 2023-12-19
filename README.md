@@ -40,3 +40,71 @@ go run main.go
 ```
 
 Once the `hook-runner` service has started it will start listening on the `RABBITMQ_URL` for messages added to the `RABBITMQ_QUEUE`.
+
+## Deployment
+
+### Kubernetes
+
+#### Local
+
+Start `minikube`
+
+```
+minikube start
+```
+
+Direct `minikube` to use the `docker` env. Any `docker build ...` commands after this command is run will build inside the `minikube` registry and will not be visible in Docker Desktop. `minikube` uses its own docker daemon which is separate from the docker daemon on your host machine. Running `docker images` inside the `minikube` vm will show the images accessible to `minikube`
+
+```
+eval $(minikube docker-env)
+```
+
+```
+docker build -t hook-runner-image:latest .
+```
+
+#### Environment Variables (if needed)
+
+```
+kubectl create secret generic awsconfig-secret --from-env-file=./.env
+kubectl create secret generic rabbitmqurl-secret --from-env-file=./.env
+kubectl create secret generic rabbitmqqueue-secret --from-env-file=./.env
+kubectl create secret generic dynamodbqueuetable-secret --from-env-file=./.env
+kubectl create secret generic dynamodbprocessedtable-secret --from-env-file=./.env
+```
+
+```
+kubectl apply -f ./k8s/hook-runner.deployment.yaml
+```
+
+```
+kubectl apply -f ./k8s/hook-runner.service.yaml
+```
+
+```
+kubectl get deployments
+```
+
+```
+kubectl get pods
+```
+
+```
+minikube service hook-runner-service
+```
+
+After running the last comment the application will be able to be accessed in the browser at the specified port that `minikube` assigns.
+
+#### Troubleshooting
+
+```
+minikube ssh 'docker images'
+```
+
+```
+kubectl logs <pod-name>
+```
+
+```
+kubectl logs -f <pod-name>
+```
