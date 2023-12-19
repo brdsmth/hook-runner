@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,14 +118,23 @@ func processMessage(msg amqp.Delivery) {
 	// log.Print(job)
 	log.Printf("Processing:\t\t%s", job.RowKey)
 
-	// Marshal the Payload to a JSON byte slice
-	payloadBytes, err := json.Marshal(job.Payload)
-	if err != nil {
-		log.Printf("Error marshaling payload for job %s: %v", job.JobID, err)
-	}
+	var payloadReader io.Reader
 
-	// Convert the byte slice to a reader
-	payloadReader := bytes.NewReader(payloadBytes)
+	switch payload := job.Payload.(type) {
+	case string:
+		// If payload is already a JSON string, use it directly
+		log.Println("payload already a json string")
+		payloadReader = strings.NewReader(payload)
+	default:
+		log.Println("payload not a json string")
+		// Else, marshal the payload to JSON
+		payloadBytes, err := json.Marshal(job.Payload)
+		if err != nil {
+			log.Printf("Error marshaling payload for job %s: %v", job.JobID, err)
+			return
+		}
+		payloadReader = bytes.NewReader(payloadBytes)
+	}
 
 	// Make an HTTP POST request with the JSON payload
 	resp, err := http.Post(job.URL, "application/json", payloadReader)

@@ -10,3 +10,4 @@ _test
 
 # Ignore environment-specific files
 .env
+.DS_Store
